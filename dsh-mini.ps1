@@ -541,12 +541,21 @@ function Invoke-EditorCreate([string]$Path,[string]$FileText) {
 }
 
 function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
-    if ($null -eq $Args.old_str -or $Args.old_str -eq '') { throw 'Parameter old_str is required and cannot be empty.' }
-    $target=Require-AbsolutePath $Args.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist or is a directory." }
-    $info=Get-TextFileInfo $target; $old=([string]$Args.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n")
-    $parts=$info.Normalized.Split([string[]]@($old),[System.StringSplitOptions]::None); $count=$parts.Count-1; if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
-    if ($count -gt 1) { throw "No replacement was performed. Multiple occurrences of old_str were found; ensure it is unique." }
-    $updated = $info.Normalized.Replace($old,$new); Save-TextFileInfo $info $updated; return "The file $target has been edited successfully."
+    $stage='validate arguments'
+    try {
+        if ($null -eq $Args.old_str -or $Args.old_str -eq '') { throw 'Parameter old_str is required and cannot be empty.' }
+        $stage='resolve target'; $target=Require-AbsolutePath $Args.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist or is a directory." }
+        $stage='read file'; $info=Get-TextFileInfo $target
+        $stage='normalize replacement'; $old=([string]$Args.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n")
+        $stage='count occurrences'; $parts=$info.Normalized.Split([string[]]@($old),[System.StringSplitOptions]::None); $count=$parts.Count-1
+        if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
+        if ($count -gt 1) { throw "No replacement was performed. Multiple occurrences of old_str were found; ensure it is unique." }
+        $stage='replace text'; $updated = $info.Normalized.Replace($old,$new)
+        $stage='write file'; Save-TextFileInfo $info $updated
+        return "The file $target has been edited successfully."
+    } catch {
+        throw "str_replace failed at $stage`: $($_.Exception.Message)"
+    }
 }
 
 function Invoke-EditorInsert([System.Collections.IDictionary]$Args) {
