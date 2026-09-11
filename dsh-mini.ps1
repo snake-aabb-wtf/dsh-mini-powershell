@@ -22,9 +22,9 @@ param(
     [string]$ApiKey,
     [string]$Model,
     [string]$Cwd,
-    # Windows PowerShell 5.1 can bind an omitted string parameter as an empty
-    # string when the script is loaded through irm|iex; use a valid default.
-    [ValidateSet('auto','persistent','oneshot')][string]$ShellMode = 'auto',
+    # Validate this after binding so Windows PowerShell 5.1 irm|iex cannot
+    # reject an omitted value before the script has a chance to normalize it.
+    [string]$ShellMode = 'auto',
     [int]$MaxRounds = 0,
     [int]$ShellTimeout = 0,
     [switch]$NoStream,
@@ -43,6 +43,11 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ShellMode)) { $ShellMode = 'auto' }
+if ($ShellMode -notin @('auto','persistent','oneshot')) {
+    throw "ShellMode 必须是 auto、persistent 或 oneshot；收到：$ShellMode"
+}
 
 $script:AppName = 'dsh-mini'
 $script:AppTitle = 'DSH 极简 Agent'
