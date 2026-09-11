@@ -66,7 +66,9 @@ $script:CurrentCancel = $null
 
 function Get-ScriptLocation {
     if ($PSScriptRoot) { return $PSScriptRoot }
-    if ($MyInvocation.MyCommand.Path) { return (Split-Path -Parent $MyInvocation.MyCommand.Path) }
+    $pathProperty = $MyInvocation.MyCommand.PSObject.Properties['Path']
+    if ($pathProperty -and $pathProperty.Value) { return (Split-Path -Parent ([string]$pathProperty.Value)) }
+    if ($MyInvocation.ScriptName) { return (Split-Path -Parent $MyInvocation.ScriptName) }
     return (Get-Location).Path
 }
 
