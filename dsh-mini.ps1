@@ -714,10 +714,11 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     try {
         $ConfigValue.cwd = (Get-Location).Path; $ConfigValue.shell_mode = 'persistent'; Close-PersistentShell
-        $first = Invoke-PersistentShell "`$global:dsh_mini_selftest = 41; Write-Output '中文测试-OK'" $ConfigValue 20000
-        $second = Invoke-PersistentShell "Write-Output ('x=' + `$global:dsh_mini_selftest)" $ConfigValue 20000
+        $first = Invoke-ShellCommand "`$global:dsh_mini_selftest = 41; Write-Output '中文测试-OK'" $ConfigValue $null
+        $second = Invoke-ShellCommand "Write-Output ('x=' + `$global:dsh_mini_selftest)" $ConfigValue $null
         Check 'PowerShell Runspace 中文输出' ((Get-ResultText $first) -match '中文测试-OK')
         Check 'PowerShell Runspace 跨调用保留变量' ((Get-ResultText $second) -match 'x=41')
+        Check 'PowerShell 结果对象含 Text' ($null -ne $first.PSObject.Properties['Text'] -and $null -ne $first.PSObject.Properties['Code'] -and $null -ne $first.PSObject.Properties['Note'])
     } catch { Check 'PowerShell Runspace' $false $_.Exception.Message } finally { Close-PersistentShell }
     $failed=@($tests|Where-Object {-not $_.Ok}); Write-Host "`n自检完成：$($tests.Count) 项，通过 $($tests.Count-$failed.Count) 项，失败 $($failed.Count) 项"; Write-Output "DSH_SELFTEST_RESULT total=$($tests.Count) passed=$($tests.Count-$failed.Count) failed=$($failed.Count)"; return $(if($failed.Count){1}else{0})
 }
