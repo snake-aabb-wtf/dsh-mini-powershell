@@ -1,0 +1,15 @@
+DSH Mini PowerShell 一行启动
+
+把 dsh-mini.ps1 放在你自己的 GitHub 仓库后：
+
+irm https://raw.githubusercontent.com/<owner>/<repo>/main/dsh-mini.ps1 | iex
+
+带参数：
+
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/<owner>/<repo>/main/dsh-mini.ps1))) -Prompt '列出当前目录' -Cli
+
+首次配置：
+
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/<owner>/<repo>/main/dsh-mini.ps1))) -Setup -Cli
+
+远程执行等同于下载后执行，请在使用前审阅脚本，并优先固定到自己的仓库/提交。
