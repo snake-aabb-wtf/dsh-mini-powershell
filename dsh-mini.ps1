@@ -22,7 +22,9 @@ param(
     [string]$ApiKey,
     [string]$Model,
     [string]$Cwd,
-    [ValidateSet('auto','persistent','oneshot')][string]$ShellMode,
+    # Windows PowerShell 5.1 can bind an omitted string parameter as an empty
+    # string when the script is loaded through irm|iex; use a valid default.
+    [ValidateSet('auto','persistent','oneshot')][string]$ShellMode = 'auto',
     [int]$MaxRounds = 0,
     [int]$ShellTimeout = 0,
     [switch]$NoStream,
