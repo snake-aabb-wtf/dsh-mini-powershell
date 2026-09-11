@@ -14,32 +14,33 @@ DSH 极简 Agent - PowerShell runtime
 不会上传到第三方。远程执行前请审阅 raw 文件内容，或固定到你自己的仓库/提交。
 ]#>
 
-[CmdletBinding()]
-param(
-    [string]$Prompt,
-    [string]$Config,
-    [string]$BaseUrl,
-    [string]$ApiKey,
-    [string]$Model,
-    [string]$Cwd,
-    # Validate this after binding so Windows PowerShell 5.1 irm|iex cannot
-    # reject an omitted value before the script has a chance to normalize it.
-    [string]$ShellMode = 'auto',
-    [int]$MaxRounds = 0,
-    [int]$ShellTimeout = 0,
-    [switch]$NoStream,
-    [switch]$NoPicker,
-    [switch]$PickModel,
-    [switch]$NoSave,
-    [switch]$QuietTools,
-    [switch]$Setup,
-    [switch]$Models,
-    [switch]$SelfTest,
-    [switch]$ShellCheck,
-    [switch]$Cli,
-    [switch]$Gui,
-    [switch]$Version
-)
+function Invoke-DshMiniScript {
+    [CmdletBinding()]
+    param(
+        [string]$Prompt,
+        [string]$Config,
+        [string]$BaseUrl,
+        [string]$ApiKey,
+        [string]$Model,
+        [string]$Cwd,
+        # Validate this after binding so Windows PowerShell 5.1 irm|iex cannot
+        # reject an omitted value before the script has a chance to normalize it.
+        [string]$ShellMode = 'auto',
+        [int]$MaxRounds = 0,
+        [int]$ShellTimeout = 0,
+        [switch]$NoStream,
+        [switch]$NoPicker,
+        [switch]$PickModel,
+        [switch]$NoSave,
+        [switch]$QuietTools,
+        [switch]$Setup,
+        [switch]$Models,
+        [switch]$SelfTest,
+        [switch]$ShellCheck,
+        [switch]$Cli,
+        [switch]$Gui,
+        [switch]$Version
+    )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -749,4 +750,13 @@ function Main {
     Invoke-Interactive $configValue; return 0
 }
 
-try { $exitCode=Main; if ($Host.Name -notmatch 'ISE') { exit $exitCode } } catch { Write-Error $_.Exception.Message; Close-PersistentShell; exit 2 }
+    try { $exitCode=Main; return $exitCode } catch { Write-Error $_.Exception.Message; Close-PersistentShell; return 2 }
+}
+
+try {
+    Invoke-DshMiniScript @args | ForEach-Object {
+        if ($_ -isnot [int]) { Write-Output $_ }
+    }
+} finally {
+    Remove-Item -LiteralPath Function:\Invoke-DshMiniScript -Force -ErrorAction SilentlyContinue
+}
