@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#[
 DSH 极简 Agent - PowerShell runtime
 将原 dsh-mini.py 的运行时功能迁移到 Windows PowerShell 5.1 / PowerShell 7。
