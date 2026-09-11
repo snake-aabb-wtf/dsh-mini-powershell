@@ -470,9 +470,9 @@ function Limit-Output([string]$Text, [int]$MaxChars, [string]$Marker) {
     return $Text.Substring(0,$MaxChars) + $Marker
 }
 
-function Invoke-PwshTool([System.Collections.IDictionary]$Args, [System.Collections.IDictionary]$ConfigValue, [scriptblock]$OnOutput) {
-    if (-not $Args.command) { throw 'command must be a non-empty string' }
-    $result = Invoke-ShellCommand ([string]$Args.command) $ConfigValue $OnOutput
+function Invoke-PwshTool([System.Collections.IDictionary]$ToolArgs, [System.Collections.IDictionary]$ConfigValue, [scriptblock]$OnOutput) {
+    if (-not $ToolArgs.command) { throw 'command must be a non-empty string' }
+    $result = Invoke-ShellCommand ([string]$ToolArgs.command) $ConfigValue $OnOutput
     $resultText = Get-ResultText $result
     $body = if ($resultText) { $resultText } else { '(no output)' }
     $body = Limit-Output $body ([int]$ConfigValue.max_output_chars) $script:TruncatedShell
@@ -540,13 +540,13 @@ function Invoke-EditorCreate([string]$Path,[string]$FileText) {
     [IO.File]::WriteAllText($target,$FileText,(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); return "New file created successfully at: $target"
 }
 
-function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
+function Invoke-EditorReplace([System.Collections.IDictionary]$ToolArgs) {
     $stage='validate arguments'
     try {
-        if ($null -eq $Args.old_str -or $Args.old_str -eq '') { throw 'Parameter old_str is required and cannot be empty.' }
-        $stage='resolve target'; $target=Require-AbsolutePath $Args.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist or is a directory." }
+        if ($null -eq $ToolArgs.old_str -or $ToolArgs.old_str -eq '') { throw 'Parameter old_str is required and cannot be empty.' }
+        $stage='resolve target'; $target=Require-AbsolutePath $ToolArgs.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist or is a directory." }
         $stage='read file'; $info=Get-TextFileInfo $target
-        $stage='normalize replacement'; $old=([string]$Args.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n")
+        $stage='normalize replacement'; $old=([string]$ToolArgs.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$ToolArgs.new_str).Replace("`r`n","`n").Replace("`r","`n")
         $stage='count occurrences'; $parts=$info.Normalized.Split([string[]]@($old),[System.StringSplitOptions]::None); $count=$parts.Count-1
         if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
         if ($count -gt 1) { throw "No replacement was performed. Multiple occurrences of old_str were found; ensure it is unique." }
@@ -558,23 +558,23 @@ function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
     }
 }
 
-function Invoke-EditorInsert([System.Collections.IDictionary]$Args) {
-    if ($null -eq $Args.insert_line -or $null -eq $Args.new_str) { throw 'insert_line and new_str are required.' }
-    $target=Require-AbsolutePath $Args.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist." }
-    $info=Get-TextFileInfo $target; $lines=@($info.Normalized -split "`n"); $line=[int]$Args.insert_line; if ($line -lt 0 -or $line -gt $lines.Count) { throw "insert_line must be within [0,$($lines.Count)]." }
-    $insert=@(([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n") -split "`n")
+function Invoke-EditorInsert([System.Collections.IDictionary]$ToolArgs) {
+    if ($null -eq $ToolArgs.insert_line -or $null -eq $ToolArgs.new_str) { throw 'insert_line and new_str are required.' }
+    $target=Require-AbsolutePath $ToolArgs.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist." }
+    $info=Get-TextFileInfo $target; $lines=@($info.Normalized -split "`n"); $line=[int]$ToolArgs.insert_line; if ($line -lt 0 -or $line -gt $lines.Count) { throw "insert_line must be within [0,$($lines.Count)]." }
+    $insert=@(([string]$ToolArgs.new_str).Replace("`r`n","`n").Replace("`r","`n") -split "`n")
     if ($line -eq 0) { $after=@($insert + $lines) }
     elseif ($line -eq $lines.Count) { $after=@($lines + $insert) }
     else { $after=@($lines[0..($line-1)] + $insert + $lines[$line..($lines.Count-1)]) }
     Save-TextFileInfo $info ($after -join "`n"); return "The file $target has been edited successfully."
 }
 
-function Invoke-EditorTool([System.Collections.IDictionary]$Args,[int]$MaxChars) {
-    switch ([string]$Args.command) {
-        'view' { return Invoke-EditorView $Args.path $Args.view_range $MaxChars }
-        'create' { return Invoke-EditorCreate $Args.path $Args.file_text }
-        'str_replace' { return Invoke-EditorReplace $Args }
-        'insert' { return Invoke-EditorInsert $Args }
+function Invoke-EditorTool([System.Collections.IDictionary]$ToolArgs,[int]$MaxChars) {
+    switch ([string]$ToolArgs.command) {
+        'view' { return Invoke-EditorView $ToolArgs.path $ToolArgs.view_range $MaxChars }
+        'create' { return Invoke-EditorCreate $ToolArgs.path $ToolArgs.file_text }
+        'str_replace' { return Invoke-EditorReplace $ToolArgs }
+        'insert' { return Invoke-EditorInsert $ToolArgs }
         default { throw 'command must be one of: view, create, str_replace, insert' }
     }
 }
