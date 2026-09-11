@@ -25,7 +25,7 @@ function Invoke-DshMiniScript {
         [string]$Cwd,
         # Validate this after binding so Windows PowerShell 5.1 irm|iex cannot
         # reject an omitted value before the script has a chance to normalize it.
-        [string]$ShellMode = 'auto',
+        [string]$ShellMode,
         [int]$MaxRounds = 0,
         [int]$ShellTimeout = 0,
         [switch]$NoStream,
@@ -45,7 +45,8 @@ function Invoke-DshMiniScript {
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-if ([string]::IsNullOrWhiteSpace($ShellMode)) { $ShellMode = 'auto' }
+$shellModeSpecified = -not [string]::IsNullOrWhiteSpace($ShellMode)
+if (-not $shellModeSpecified) { $ShellMode = 'auto' }
 if ($ShellMode -notin @('auto','persistent','oneshot')) {
     throw "ShellMode 必须是 auto、persistent 或 oneshot；收到：$ShellMode"
 }
@@ -221,7 +222,7 @@ function Get-EffectiveConfig {
     if ($ApiKey) { $cli.api_key = $ApiKey }
     if ($Model) { $cli.model = $Model }
     if ($Cwd) { $cli.cwd = $Cwd }
-    if ($ShellMode) { $cli.shell_mode = $ShellMode }
+    if ($shellModeSpecified) { $cli.shell_mode = $ShellMode }
     if ($MaxRounds -gt 0) { $cli.max_tool_rounds = $MaxRounds }
     if ($ShellTimeout -gt 0) { $cli.shell_timeout_ms = $ShellTimeout }
     if ($NoStream) { $cli.stream = $false }
@@ -655,8 +656,8 @@ function Invoke-AgentTurn([string]$UserText,[System.Collections.IDictionary]$Con
         $history=[ordered]@{role='assistant';content=$assistant.content}; if ($toolCalls.Count -gt 0) {$history.tool_calls=$toolCalls}; if ($null -eq $history.content -and $toolCalls.Count -eq 0) {$history.content=''}; [void]$MessageList.Add($history)
         if ($toolCalls.Count -eq 0) { return [string]$assistant.content }
         foreach ($call in $toolCalls) {
-            $name=$call.function.name; $args=@{}; try {$args=ConvertTo-HashtableDeep ($call.function.arguments|ConvertFrom-Json)} catch {$args=@{}}
-            $started=Get-Date; if ($OnToolStart) { & $OnToolStart $name $args | Out-Null }; $isError=$false
+            $name=$call.function.name; $toolArguments=@{}; try {$toolArguments=ConvertTo-HashtableDeep ($call.function.arguments|ConvertFrom-Json)} catch {$toolArguments=@{}}
+            $started=Get-Date; if ($OnToolStart) { & $OnToolStart $name $toolArguments | Out-Null }; $isError=$false
             try { if ($name -eq 'pwsh') {$result=Invoke-PwshTool $args $ConfigValue $(if($ConfigValue.show_live_output){$OnText}else{$null})} elseif($name -eq 'str_replace_editor'){$result=Invoke-EditorTool $args $maxChars} else {throw "Unknown tool: $name"} } catch {$result=$_.Exception.Message; $isError=$true}
             $elapsed=((Get-Date)-$started).TotalSeconds; [void]$MessageList.Add([ordered]@{role='tool';tool_call_id=$call.id;content=[string]$result}); if ($OnToolEnd) { & $OnToolEnd $name ([string]$result) $elapsed $isError | Out-Null }
         }
