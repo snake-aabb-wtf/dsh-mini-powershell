@@ -194,7 +194,7 @@ function Save-ConfigFile([string]$Path, [object]$Data) {
     $parent = Split-Path -Parent $Path
     if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
     $json = $Data | ConvertTo-Json -Depth 30
-    [IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false))
 }
 
 function Get-EnvironmentConfig {
@@ -270,7 +270,7 @@ function ConvertTo-PowerShellLiteral([string]$Value) {
 function Read-WebExceptionBody([System.Net.WebException]$Exception) {
     try {
         $stream = $Exception.Response.GetResponseStream()
-        $reader = New-Object IO.StreamReader($stream)
+        $reader = New-Object -TypeName System.IO.StreamReader -ArgumentList $stream
         $text = $reader.ReadToEnd(); $reader.Dispose(); $stream.Dispose(); return $text
     } catch { return '' }
 }
@@ -299,13 +299,13 @@ function Invoke-HttpJson([string]$Uri, [string]$Method, [System.Collections.IDic
         else { $request.Headers[$key] = $Headers[$key] }
     }
     if ($Body) {
-        $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Body)
+        $bytes = (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false).GetBytes($Body)
         $request.ContentLength = $bytes.Length
         $stream = $request.GetRequestStream(); $stream.Write($bytes,0,$bytes.Length); $stream.Dispose()
     }
     try {
         $response = $request.GetResponse()
-        $reader = New-Object IO.StreamReader($response.GetResponseStream(), (New-Object Text.UTF8Encoding($false)))
+        $reader = New-Object -TypeName System.IO.StreamReader -ArgumentList $response.GetResponseStream(), (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)
         $result = $reader.ReadToEnd(); $reader.Dispose(); $response.Dispose(); return $result
     } catch [Net.WebException] {
         $response = $_.Exception.Response
@@ -335,7 +335,7 @@ function Mask-Secret([string]$Value) {
 
 function Read-SecretConsole([string]$PromptText) {
     Write-Host -NoNewline $PromptText
-    $chars = New-Object System.Collections.Generic.List[char]
+    $chars = New-Object -TypeName System.Collections.Generic.List[char]
     while ($true) {
         $key = [Console]::ReadKey($true)
         if ($key.Key -eq 'Enter') { Write-Host ''; break }
@@ -405,12 +405,12 @@ function Close-PersistentShell {
 function Invoke-OneShotShell([string]$Command, [System.Collections.IDictionary]$ConfigValue, [int]$TimeoutMs) {
     $exe = Get-PowerShellExecutable $ConfigValue
     $tempPath = Join-Path ([IO.Path]::GetTempPath()) ('dsh-mini-' + [guid]::NewGuid().ToString('N') + '.ps1')
-    [IO.File]::WriteAllText($tempPath, $Command, (New-Object Text.UTF8Encoding($true)))
-    $start = New-Object Diagnostics.ProcessStartInfo
+    [IO.File]::WriteAllText($tempPath, $Command, (New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $true))
+    $start = New-Object -TypeName System.Diagnostics.ProcessStartInfo
     $quotedPath = '"' + $tempPath.Replace('"','\"') + '"'
     $start.FileName = $exe; $start.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' + $quotedPath
     $start.WorkingDirectory = $ConfigValue.cwd; $start.UseShellExecute = $false; $start.CreateNoWindow = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
-    $process = New-Object Diagnostics.Process; $process.StartInfo = $start
+    $process = New-Object -TypeName System.Diagnostics.Process; $process.StartInfo = $start
     try {
         if (-not $process.Start()) { throw ('无法启动 ' + $exe) }
     } catch { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue; throw }
@@ -442,16 +442,25 @@ function Invoke-PersistentShell([string]$Command, [System.Collections.IDictionar
 function Invoke-ShellCommand([string]$Command, [System.Collections.IDictionary]$ConfigValue, [scriptblock]$OnOutput) {
     if (-not $Command.Trim()) { throw 'command must be a non-empty string' }
     $mode = [string]$ConfigValue.shell_mode
+    $fallbackNote = ''
     if ($mode -eq 'oneshot') { $result = Invoke-OneShotShell $Command $ConfigValue ([int]$ConfigValue.shell_timeout_ms) }
     else {
         try { $result = Invoke-PersistentShell $Command $ConfigValue ([int]$ConfigValue.shell_timeout_ms) }
         catch {
             if ($mode -eq 'persistent') { throw }
             Close-PersistentShell; $ConfigValue.shell_mode = 'oneshot'; $result = Invoke-OneShotShell $Command $ConfigValue ([int]$ConfigValue.shell_timeout_ms)
-            $result.Note = 'persistent runspace unavailable; switched to one-shot mode'
+            $fallbackNote = 'persistent runspace unavailable; switched to one-shot mode'
         }
     }
-    if ($OnOutput -and $result.Text) { & $OnOutput $result.Text }
+    $resultNote = [string](Get-ObjectValue $result 'Note')
+    if ($fallbackNote) { $resultNote = $fallbackNote }
+    $result = [pscustomobject]@{
+        Text = Get-ResultText $result
+        Code = Get-ObjectValue $result 'Code'
+        Note = $resultNote
+    }
+    $resultText = $result.Text
+    if ($OnOutput -and $resultText) { & $OnOutput $resultText }
     return $result
 }
 
@@ -464,7 +473,8 @@ function Limit-Output([string]$Text, [int]$MaxChars, [string]$Marker) {
 function Invoke-PwshTool([System.Collections.IDictionary]$Args, [System.Collections.IDictionary]$ConfigValue, [scriptblock]$OnOutput) {
     if (-not $Args.command) { throw 'command must be a non-empty string' }
     $result = Invoke-ShellCommand ([string]$Args.command) $ConfigValue $OnOutput
-    $body = if ($result.Text) { $result.Text } else { '(no output)' }
+    $resultText = Get-ResultText $result
+    $body = if ($resultText) { $resultText } else { '(no output)' }
     $body = Limit-Output $body ([int]$ConfigValue.max_output_chars) $script:TruncatedShell
     if ($null -ne $result.Code -and $result.Code -ne 0) { $body += "`n[exit code: $($result.Code)]" }
     if ($result.Note) { $body += "`n$($result.Note)" }
@@ -472,12 +482,12 @@ function Invoke-PwshTool([System.Collections.IDictionary]$Args, [System.Collecti
 }
 
 function Get-TextFileInfo([string]$Path) {
-    $raw = [IO.File]::ReadAllBytes($Path); $encoding = New-Object Text.UTF8Encoding($false); $bom = $false; $offset = 0
-    if ($raw.Length -ge 3 -and $raw[0] -eq 0xef -and $raw[1] -eq 0xbb -and $raw[2] -eq 0xbf) { $encoding = New-Object Text.UTF8Encoding($false); $bom=$true; $offset=3 }
-    elseif ($raw.Length -ge 2 -and $raw[0] -eq 0xff -and $raw[1] -eq 0xfe) { $encoding = New-Object Text.UnicodeEncoding($false,$true); $bom=$true; $offset=2 }
-    elseif ($raw.Length -ge 2 -and $raw[0] -eq 0xfe -and $raw[1] -eq 0xff) { $encoding = New-Object Text.UnicodeEncoding($true,$true); $bom=$true; $offset=2 }
+    $raw = [IO.File]::ReadAllBytes($Path); $encoding = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false; $bom = $false; $offset = 0
+    if ($raw.Length -ge 3 -and $raw[0] -eq 0xef -and $raw[1] -eq 0xbb -and $raw[2] -eq 0xbf) { $encoding = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false; $bom=$true; $offset=3 }
+    elseif ($raw.Length -ge 2 -and $raw[0] -eq 0xff -and $raw[1] -eq 0xfe) { $encoding = New-Object -TypeName System.Text.UnicodeEncoding -ArgumentList $false,$true; $bom=$true; $offset=2 }
+    elseif ($raw.Length -ge 2 -and $raw[0] -eq 0xfe -and $raw[1] -eq 0xff) { $encoding = New-Object -TypeName System.Text.UnicodeEncoding -ArgumentList $true,$true; $bom=$true; $offset=2 }
     else {
-        try { $strict = New-Object Text.UTF8Encoding($false,$true); $text = $strict.GetString($raw); $encoding = New-Object Text.UTF8Encoding($false) }
+        try { $strict = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false,$true; $text = $strict.GetString($raw); $encoding = New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false }
         catch { $encoding = [Text.Encoding]::Default }
     }
     $text = $encoding.GetString($raw,$offset,$raw.Length-$offset)
@@ -501,7 +511,7 @@ function Invoke-EditorView([string]$Path, [object]$ViewRange, [int]$MaxChars) {
     $target = Require-AbsolutePath $Path
     if (-not (Test-Path -LiteralPath $target)) { throw "The path $target does not exist." }
     if (Test-Path -LiteralPath $target -PathType Container) {
-        $rows = New-Object System.Collections.Generic.List[string]; [void]$rows.Add("d`t$target")
+        $rows = New-Object -TypeName System.Collections.Generic.List[string]; [void]$rows.Add("d`t$target")
         function Visit-EditorDirectory([string]$Dir,[int]$Depth) {
             foreach ($item in @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) {
                 if ($item.Name.StartsWith('.') -or $item.Name -in @('node_modules','__pycache__')) { continue }
@@ -527,7 +537,7 @@ function Invoke-EditorCreate([string]$Path,[string]$FileText) {
     if ($null -eq $FileText) { throw 'Parameter file_text is required for create.' }
     $target=Require-AbsolutePath $Path; if (Test-Path -LiteralPath $target) { throw "File already exists at: $target." }
     $parent=Split-Path -Parent $target; if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw "Parent directory does not exist: $parent" }
-    [IO.File]::WriteAllText($target,$FileText,(New-Object Text.UTF8Encoding($false))); return "New file created successfully at: $target"
+    [IO.File]::WriteAllText($target,$FileText,(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); return "New file created successfully at: $target"
 }
 
 function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
@@ -581,6 +591,14 @@ function New-ChatPayload([System.Collections.ArrayList]$MessageList,[System.Coll
 
 function Test-Cancelled([object]$Token) { return ($Token -and $Token.IsCancellationRequested) }
 
+function Get-ResultText([object]$Value) {
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) { return [string]$Value }
+    $textProperty = $Value.PSObject.Properties['Text']
+    if ($textProperty -and $null -ne $textProperty.Value) { return [string]$textProperty.Value }
+    return [string]$Value
+}
+
 function Invoke-ChatRequest([System.Collections.ArrayList]$MessageList,[System.Collections.IDictionary]$ConfigValue,[scriptblock]$OnText,[scriptblock]$OnReasoning,[scriptblock]$OnUsage,[object]$CancelToken) {
     $uri=Normalize-BaseUrl $ConfigValue.base_url; if (-not $uri) { throw '未配置 base_url，请先运行 -Setup' }
     if (-not $ConfigValue.model) { throw '未配置 model' }
@@ -590,12 +608,12 @@ function Invoke-ChatRequest([System.Collections.ArrayList]$MessageList,[System.C
         try {
             $request=[Net.HttpWebRequest]::Create($uri); $request.Method='POST'; $request.ContentType='application/json'; $request.Accept=$headers.Accept; $request.UserAgent=$headers.'User-Agent'; $request.Timeout=[int]$ConfigValue.request_timeout*1000; $request.ReadWriteTimeout=[int]$ConfigValue.request_timeout*1000
             if ($ConfigValue.api_key) { $request.Headers['Authorization']='Bearer '+$ConfigValue.api_key }; foreach ($key in $ConfigValue.extra_headers.Keys) { $request.Headers[$key]=[string]$ConfigValue.extra_headers[$key] }
-            $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($body); $request.ContentLength=$bytes.Length; $stream=$request.GetRequestStream(); $stream.Write($bytes,0,$bytes.Length); $stream.Dispose()
-            $response=$request.GetResponse(); $reader=New-Object IO.StreamReader($response.GetResponseStream(),(New-Object Text.UTF8Encoding($false)))
+            $bytes=(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false).GetBytes($body); $request.ContentLength=$bytes.Length; $stream=$request.GetRequestStream(); $stream.Write($bytes,0,$bytes.Length); $stream.Dispose()
+            $response=$request.GetResponse(); $reader=New-Object -TypeName System.IO.StreamReader -ArgumentList $response.GetResponseStream(),(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)
             if (-not $ConfigValue.stream) {
                 $raw=$reader.ReadToEnd(); $reader.Dispose(); $response.Dispose(); $data=$raw|ConvertFrom-Json; $errorValue=Get-ObjectValue $data 'error'; if ($errorValue) { throw ('接口错误：'+($errorValue|ConvertTo-Json -Compress)) }; $choices=@(Get-ObjectValue $data 'choices'); if ($choices.Count -eq 0) { throw '接口未返回 choices' }; $message=Get-ObjectValue $choices[0] 'message'; return [pscustomobject]@{role='assistant';content=(Get-ObjectValue $message 'content');tool_calls=(Get-ObjectValue $message 'tool_calls')}
             }
-            $content=New-Object System.Collections.Generic.List[string]; $reasoning=New-Object System.Collections.Generic.List[string]; $calls=@{}; $finish=$null
+            $content=New-Object -TypeName System.Collections.Generic.List[string]; $reasoning=New-Object -TypeName System.Collections.Generic.List[string]; $calls=@{}; $finish=$null
             while ($null -ne ($line=$reader.ReadLine())) {
                 if (Test-Cancelled $CancelToken) { throw '已取消' }; if (-not $line.StartsWith('data:')) { continue }; $dataText=$line.Substring(5).Trim(); if ($dataText -eq '[DONE]') { break }
                 try { $chunk=$dataText|ConvertFrom-Json } catch { continue }
@@ -624,9 +642,10 @@ function Invoke-AgentTurn([string]$UserText,[System.Collections.IDictionary]$Con
     [void]$MessageList.Add([ordered]@{role='user';content=$UserText}); $maxChars=[int]$ConfigValue.max_output_chars
     for ($round=0;$round -lt [int]$ConfigValue.max_tool_rounds;$round++) {
         $assistant=Invoke-ChatRequest $MessageList $ConfigValue $OnText $OnReasoning $OnUsage $CancelToken
-        $history=[ordered]@{role='assistant';content=$assistant.content}; if ($assistant.tool_calls.Count -gt 0) {$history.tool_calls=$assistant.tool_calls}; if ($null -eq $history.content -and -not $history.tool_calls) {$history.content=''}; [void]$MessageList.Add($history)
-        if (-not $assistant.tool_calls -or $assistant.tool_calls.Count -eq 0) { return [string]$assistant.content }
-        foreach ($call in @($assistant.tool_calls)) {
+        $toolCalls = @($assistant.tool_calls)
+        $history=[ordered]@{role='assistant';content=$assistant.content}; if ($toolCalls.Count -gt 0) {$history.tool_calls=$toolCalls}; if ($null -eq $history.content -and $toolCalls.Count -eq 0) {$history.content=''}; [void]$MessageList.Add($history)
+        if ($toolCalls.Count -eq 0) { return [string]$assistant.content }
+        foreach ($call in $toolCalls) {
             $name=$call.function.name; $args=@{}; try {$args=ConvertTo-HashtableDeep ($call.function.arguments|ConvertFrom-Json)} catch {$args=@{}}
             $started=Get-Date; if ($OnToolStart) { & $OnToolStart $name $args | Out-Null }; $isError=$false
             try { if ($name -eq 'pwsh') {$result=Invoke-PwshTool $args $ConfigValue $(if($ConfigValue.show_live_output){$OnText}else{$null})} elseif($name -eq 'str_replace_editor'){$result=Invoke-EditorTool $args $maxChars} else {throw "Unknown tool: $name"} } catch {$result=$_.Exception.Message; $isError=$true}
@@ -660,27 +679,27 @@ function Initialize-Messages([System.Collections.IDictionary]$ConfigValue) { $sc
 function Invoke-ShellCheck([System.Collections.IDictionary]$ConfigValue) {
     Write-Host "`n$('='*68)`n dsh-mini PowerShell 诊断（离线，不联网）`n$('='*68)"
     Write-Host "版本：$($script:Version) / PowerShell：$($PSVersionTable.PSVersion) / 工作目录：$($ConfigValue.cwd)"
-    try { $probe=Invoke-ShellCommand "Write-Output ('DSHMINI_PROBE_OK ps=' + `$PSVersionTable.PSVersion + ' cn=中文探测正常')" $ConfigValue $null; Write-Host "√ 探针通过：$($probe.Text)"; Write-Host "模式：$($ConfigValue.shell_mode)；实现：$($probe.Note)"; return 0 }
+    try { $probe=Invoke-ShellCommand "Write-Output ('DSHMINI_PROBE_OK ps=' + `$PSVersionTable.PSVersion + ' cn=中文探测正常')" $ConfigValue $null; Write-Host "√ 探针通过：$(Get-ResultText $probe)"; Write-Host "模式：$($ConfigValue.shell_mode)；实现：$($probe.Note)"; return 0 }
     catch { Write-Host "× 探针失败：$($_.Exception.Message)"; return 1 }
 }
 
 function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
-    $tests=New-Object System.Collections.Generic.List[object]
+    $tests=New-Object -TypeName System.Collections.Generic.List[object]
     function Check([string]$Name,[bool]$Ok,[string]$Detail='') { [void]$tests.Add([pscustomobject]@{Name=$Name;Ok=$Ok;Detail=$Detail}); Write-Host ("[{0}] {1}{2}" -f $(if($Ok){'√'}else{'×'}),$Name,$(if($Detail){' - '+$Detail}else{''})) }
     Check 'Normalize base_url 裸域名' ((Normalize-BaseUrl 'https://api.example.com') -eq 'https://api.example.com/v1/chat/completions')
     Check 'Normalize base_url 自定义路径' ((Normalize-BaseUrl 'https://x.com/openai') -eq 'https://x.com/openai/chat/completions')
     Check 'models endpoint' ((Get-ModelsEndpoint 'https://x.com/v1/chat/completions') -eq 'https://x.com/v1/models')
     $tmp=Join-Path ([IO.Path]::GetTempPath()) ('dsh-mini-test-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $tmp|Out-Null
     try {
-        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object Text.UTF8Encoding($false))); $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match 'a`r`nx`r`nB'); $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
+        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match 'a`r`nx`r`nB'); $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
     } catch { Check 'editor functions' $false $_.Exception.Message }
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     try {
         $ConfigValue.cwd = (Get-Location).Path; $ConfigValue.shell_mode = 'persistent'; Close-PersistentShell
         $first = Invoke-PersistentShell "`$global:dsh_mini_selftest = 41; Write-Output '中文测试-OK'" $ConfigValue 20000
         $second = Invoke-PersistentShell "Write-Output ('x=' + `$global:dsh_mini_selftest)" $ConfigValue 20000
-        Check 'PowerShell Runspace 中文输出' ($first.Text -match '中文测试-OK')
-        Check 'PowerShell Runspace 跨调用保留变量' ($second.Text -match 'x=41')
+        Check 'PowerShell Runspace 中文输出' ((Get-ResultText $first) -match '中文测试-OK')
+        Check 'PowerShell Runspace 跨调用保留变量' ((Get-ResultText $second) -match 'x=41')
     } catch { Check 'PowerShell Runspace' $false $_.Exception.Message } finally { Close-PersistentShell }
     $failed=@($tests|Where-Object {-not $_.Ok}); Write-Host "`n自检完成：$($tests.Count) 项，通过 $($tests.Count-$failed.Count) 项，失败 $($failed.Count) 项"; return $(if($failed.Count){1}else{0})
 }
@@ -705,10 +724,10 @@ function Invoke-Interactive([System.Collections.IDictionary]$ConfigValue) {
 
 function Show-GuiInput([string]$Title,[string]$Label,[string]$Current,[bool]$Secret=$false) {
     Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
-    $form=New-Object Windows.Forms.Form; $form.Text=$Title; $form.Width=500;$form.Height=170;$form.StartPosition='CenterParent';$form.TopMost=$true
-    $label=New-Object Windows.Forms.Label;$label.Text=$Label;$label.Left=12;$label.Top=12;$label.Width=450
-    $box=New-Object Windows.Forms.TextBox;$box.Text=$Current;$box.Left=12;$box.Top=35;$box.Width=455;if($Secret){$box.UseSystemPasswordChar=$true}
-    $ok=New-Object Windows.Forms.Button;$ok.Text='确定';$ok.Left=300;$ok.Top=78;$ok.Width=80;$ok.DialogResult='OK';$cancel=New-Object Windows.Forms.Button;$cancel.Text='取消';$cancel.Left=390;$cancel.Top=78;$cancel.Width=80;$cancel.DialogResult='Cancel'
+    $form=New-Object -TypeName System.Windows.Forms.Form; $form.Text=$Title; $form.Width=500;$form.Height=170;$form.StartPosition='CenterParent';$form.TopMost=$true
+    $label=New-Object -TypeName System.Windows.Forms.Label;$label.Text=$Label;$label.Left=12;$label.Top=12;$label.Width=450
+    $box=New-Object -TypeName System.Windows.Forms.TextBox;$box.Text=$Current;$box.Left=12;$box.Top=35;$box.Width=455;if($Secret){$box.UseSystemPasswordChar=$true}
+    $ok=New-Object -TypeName System.Windows.Forms.Button;$ok.Text='确定';$ok.Left=300;$ok.Top=78;$ok.Width=80;$ok.DialogResult='OK';$cancel=New-Object -TypeName System.Windows.Forms.Button;$cancel.Text='取消';$cancel.Left=390;$cancel.Top=78;$cancel.Width=80;$cancel.DialogResult='Cancel'
     $form.Controls.AddRange(@($label,$box,$ok,$cancel));$form.AcceptButton=$ok;$form.CancelButton=$cancel;$form.Add_Shown({$box.Focus();$box.SelectAll()})
     if($form.ShowDialog() -eq 'OK'){return $box.Text};return $null
 }
@@ -717,27 +736,27 @@ function Start-Gui([System.Collections.IDictionary]$ConfigValue) {
     Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
     if (-not $ConfigValue.api_key -or $Setup) { $b=Show-GuiInput $script:AppTitle '接口地址 base_url' $ConfigValue.base_url; if($b){$ConfigValue.base_url=$b};$k=Show-GuiInput $script:AppTitle 'API Key' $ConfigValue.api_key $true;if($k){$ConfigValue.api_key=$k};$m=Show-GuiInput $script:AppTitle '模型名 model' $ConfigValue.model;if($m){$ConfigValue.model=$m};Save-ConfigFile (Get-ConfigPath $Config) $ConfigValue }
     Initialize-Messages $ConfigValue
-    $form=New-Object Windows.Forms.Form;$form.Text="$($script:AppTitle) v$($script:Version)";$form.Width=950;$form.Height=700;$form.StartPosition='CenterScreen';$form.KeyPreview=$true
-    $output=New-Object Windows.Forms.RichTextBox;$output.Dock='Fill';$output.ReadOnly=$true;$output.Font=New-Object Drawing.Font('Microsoft YaHei',10);$output.BackColor=[Drawing.Color]::White
-    $panel=New-Object Windows.Forms.Panel;$panel.Dock='Bottom';$panel.Height=92
-    $inputBox=New-Object Windows.Forms.TextBox;$inputBox.Multiline=$true;$inputBox.Left=8;$inputBox.Top=8;$inputBox.Width=730;$inputBox.Height=58;$inputBox.Font=$output.Font
-    $send=New-Object Windows.Forms.Button;$send.Text='发送';$send.Left=750;$send.Top=8;$send.Width=80;$send.Height=28;$stop=New-Object Windows.Forms.Button;$stop.Text='停止';$stop.Left=840;$stop.Top=8;$stop.Width=80;$stop.Height=28;$stop.Enabled=$false
-    $status=New-Object Windows.Forms.Label;$status.Text='就绪';$status.Left=8;$status.Top=70;$status.Width=900
+    $form=New-Object -TypeName System.Windows.Forms.Form;$form.Text="$($script:AppTitle) v$($script:Version)";$form.Width=950;$form.Height=700;$form.StartPosition='CenterScreen';$form.KeyPreview=$true
+    $output=New-Object -TypeName System.Windows.Forms.RichTextBox;$output.Dock='Fill';$output.ReadOnly=$true;$output.Font=New-Object -TypeName System.Drawing.Font -ArgumentList 'Microsoft YaHei',10;$output.BackColor=[System.Drawing.Color]::White
+    $panel=New-Object -TypeName System.Windows.Forms.Panel;$panel.Dock='Bottom';$panel.Height=92
+    $inputBox=New-Object -TypeName System.Windows.Forms.TextBox;$inputBox.Multiline=$true;$inputBox.Left=8;$inputBox.Top=8;$inputBox.Width=730;$inputBox.Height=58;$inputBox.Font=$output.Font
+    $send=New-Object -TypeName System.Windows.Forms.Button;$send.Text='发送';$send.Left=750;$send.Top=8;$send.Width=80;$send.Height=28;$stop=New-Object -TypeName System.Windows.Forms.Button;$stop.Text='停止';$stop.Left=840;$stop.Top=8;$stop.Width=80;$stop.Height=28;$stop.Enabled=$false
+    $status=New-Object -TypeName System.Windows.Forms.Label;$status.Text='就绪';$status.Left=8;$status.Top=70;$status.Width=900
     $panel.Controls.AddRange(@($inputBox,$send,$stop,$status));$form.Controls.AddRange(@($output,$panel))
-    $menu=New-Object Windows.Forms.MenuStrip; $items=@{}
-    function Add-Menu([string]$Title,[string]$Text,[scriptblock]$Action) {$item=New-Object Windows.Forms.ToolStripMenuItem($Text);$item.Add_Click($Action.GetNewClosure());$items[$Title]=$item;return $item}
-    $session=New-Object Windows.Forms.ToolStripMenuItem('会话');$session.DropDownItems.Add((Add-Menu 'new' '新对话' {Initialize-Messages $ConfigValue;$output.Clear()}))|Out-Null;$session.DropDownItems.Add((Add-Menu 'save' '保存会话' {Save-Session $script:Messages $ConfigValue $null|Out-Null;$status.Text='会话已保存'}))|Out-Null;$session.DropDownItems.Add((Add-Menu 'exit' '退出' {$form.Close()}))|Out-Null
-    $tools=New-Object Windows.Forms.ToolStripMenuItem('工具');$tools.DropDownItems.Add((Add-Menu 'selftest' '离线自检' {Invoke-SelfTest $ConfigValue|Out-Null}))|Out-Null;$tools.DropDownItems.Add((Add-Menu 'shellcheck' 'PowerShell 诊断' {Invoke-ShellCheck $ConfigValue|Out-Null}))|Out-Null;$tools.DropDownItems.Add((Add-Menu 'copy' '复制全部' {$output.SelectAll();$output.Copy();$output.DeselectAll()}))|Out-Null
+    $menu=New-Object -TypeName System.Windows.Forms.MenuStrip; $items=@{}
+    function Add-Menu([string]$Title,[string]$Text,[scriptblock]$Action) {$item=New-Object -TypeName System.Windows.Forms.ToolStripMenuItem -ArgumentList $Text;$item.Add_Click($Action.GetNewClosure());$items[$Title]=$item;return $item}
+    $session=New-Object -TypeName System.Windows.Forms.ToolStripMenuItem -ArgumentList '会话';$session.DropDownItems.Add((Add-Menu 'new' '新对话' {Initialize-Messages $ConfigValue;$output.Clear()}))|Out-Null;$session.DropDownItems.Add((Add-Menu 'save' '保存会话' {Save-Session $script:Messages $ConfigValue $null|Out-Null;$status.Text='会话已保存'}))|Out-Null;$session.DropDownItems.Add((Add-Menu 'exit' '退出' {$form.Close()}))|Out-Null
+    $tools=New-Object -TypeName System.Windows.Forms.ToolStripMenuItem -ArgumentList '工具';$tools.DropDownItems.Add((Add-Menu 'selftest' '离线自检' {Invoke-SelfTest $ConfigValue|Out-Null}))|Out-Null;$tools.DropDownItems.Add((Add-Menu 'shellcheck' 'PowerShell 诊断' {Invoke-ShellCheck $ConfigValue|Out-Null}))|Out-Null;$tools.DropDownItems.Add((Add-Menu 'copy' '复制全部' {$output.SelectAll();$output.Copy();$output.DeselectAll()}))|Out-Null
     $setupAction={ $b=Show-GuiInput $script:AppTitle '接口地址 base_url' $ConfigValue.base_url;if($b){$ConfigValue.base_url=$b};$k=Show-GuiInput $script:AppTitle 'API Key' $ConfigValue.api_key $true;if($k){$ConfigValue.api_key=$k};$m=Show-GuiInput $script:AppTitle '模型名 model' $ConfigValue.model;if($m){$ConfigValue.model=$m};Save-ConfigFile (Get-ConfigPath $Config) $ConfigValue;Initialize-Messages $ConfigValue;$status.Text='设置已保存' }.GetNewClosure()
     $modelAction={ try {$picked=Select-Model $ConfigValue;if($picked){$ConfigValue.model=$picked;Save-ConfigFile (Get-ConfigPath $Config) $ConfigValue;$status.Text="模型已切换：$picked"}} catch {$status.Text='模型选择失败'} }.GetNewClosure()
-    $settings=New-Object Windows.Forms.ToolStripMenuItem('设置');$settings.DropDownItems.Add((Add-Menu 'models' '选择模型' $modelAction))|Out-Null;$settings.DropDownItems.Add((Add-Menu 'setup' '接口与密钥' $setupAction))|Out-Null;$settings.DropDownItems.Add((Add-Menu 'reasoning' '显示思考过程' {$ConfigValue.show_reasoning=-not [bool]$ConfigValue.show_reasoning;$status.Text="显示思考过程：$($ConfigValue.show_reasoning)"}))|Out-Null
-    $help=New-Object Windows.Forms.ToolStripMenuItem('帮助');$help.DropDownItems.Add((Add-Menu 'guide' '操作指南' {[Windows.Forms.MessageBox]::Show((Show-HelpText),$script:AppTitle)}))|Out-Null
+    $settings=New-Object -TypeName System.Windows.Forms.ToolStripMenuItem -ArgumentList '设置';$settings.DropDownItems.Add((Add-Menu 'models' '选择模型' $modelAction))|Out-Null;$settings.DropDownItems.Add((Add-Menu 'setup' '接口与密钥' $setupAction))|Out-Null;$settings.DropDownItems.Add((Add-Menu 'reasoning' '显示思考过程' {$ConfigValue.show_reasoning=-not [bool]$ConfigValue.show_reasoning;$status.Text="显示思考过程：$($ConfigValue.show_reasoning)"}))|Out-Null
+    $help=New-Object -TypeName System.Windows.Forms.ToolStripMenuItem -ArgumentList '帮助';$help.DropDownItems.Add((Add-Menu 'guide' '操作指南' {[System.Windows.Forms.MessageBox]::Show((Show-HelpText),$script:AppTitle)}))|Out-Null
     $menu.Items.AddRange(@($session,$tools,$settings,$help));$form.MainMenuStrip=$menu;$form.Controls.Add($menu)
-    $append = { param([string]$Text) $output.AppendText($Text);$output.SelectionStart=$output.TextLength;$output.ScrollToCaret();[IO.File]::AppendAllText((Join-Path (Get-DataRoot) $script:GuiLogName),$Text,(New-Object Text.UTF8Encoding($false))) }.GetNewClosure()
+    $append = { param([string]$Text) $output.AppendText($Text);$output.SelectionStart=$output.TextLength;$output.ScrollToCaret();[IO.File]::AppendAllText((Join-Path (Get-DataRoot) $script:GuiLogName),$Text,(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)) }.GetNewClosure()
     & $append "$($script:AppTitle) v$($script:Version)`r`n工作目录：$($ConfigValue.cwd)`r`n模型：$($ConfigValue.model)`r`n`r`n"
-    $worker=New-Object ComponentModel.BackgroundWorker
-    $sendAction={if($worker.IsBusy){return};$text=$inputBox.Text.Trim();if(-not $text){return};$inputBox.Clear();&$append "`r`n› $text`r`n";$send.Enabled=$false;$stop.Enabled=$true;$status.Text='等待模型响应…';$script:CurrentCancel=New-Object Threading.CancellationTokenSource;$worker.RunWorkerAsync($text)}.GetNewClosure();$send.Add_Click($sendAction);$inputBox.Add_KeyDown({param($s,$e)if($e.KeyCode -eq 'Enter' -and -not $e.Shift){$e.SuppressKeyPress=$true;&$sendAction}}.GetNewClosure());$stop.Add_Click({if($script:CurrentCancel){$script:CurrentCancel.Cancel();$status.Text='正在取消…'}}.GetNewClosure())
-    $worker.Add_DoWork({param($s,$e)$text=[string]$e.Argument;$e.Result=Invoke-AgentTurn $text $ConfigValue $script:Messages {param($x)$form.BeginInvoke([Action]{&$append $x})|Out-Null} {param($x)if($ConfigValue.show_reasoning){$form.BeginInvoke([Action]{&$append "`r`n…$x"})|Out-Null}} {param($n,$a)$form.BeginInvoke([Action]{&$append "`r`n» $n`r`n"})|Out-Null} {param($n,$r,$elapsed,$err)$form.BeginInvoke([Action]{&$append "`r`n$(if($err){'×'}else{'√'}) $n ($([Math]::Round($elapsed,2))s)`r`n"})|Out-Null} {param($x)$form.BeginInvoke([Action]{[Windows.Forms.MessageBox]::Show($x,$script:AppTitle)})|Out-Null} {param($u)} $script:CurrentCancel.Token}.GetNewClosure())
+    $worker=New-Object -TypeName System.ComponentModel.BackgroundWorker
+    $sendAction={if($worker.IsBusy){return};$text=$inputBox.Text.Trim();if(-not $text){return};$inputBox.Clear();&$append "`r`n› $text`r`n";$send.Enabled=$false;$stop.Enabled=$true;$status.Text='等待模型响应…';$script:CurrentCancel=New-Object System.Threading.CancellationTokenSource;$worker.RunWorkerAsync($text)}.GetNewClosure();$send.Add_Click($sendAction);$inputBox.Add_KeyDown({param($s,$e)if($e.KeyCode -eq 'Enter' -and -not $e.Shift){$e.SuppressKeyPress=$true;&$sendAction}}.GetNewClosure());$stop.Add_Click({if($script:CurrentCancel){$script:CurrentCancel.Cancel();$status.Text='正在取消…'}}.GetNewClosure())
+    $worker.Add_DoWork({param($s,$e)$text=[string]$e.Argument;$e.Result=Invoke-AgentTurn $text $ConfigValue $script:Messages {param($x)$form.BeginInvoke([Action]{&$append $x})|Out-Null} {param($x)if($ConfigValue.show_reasoning){$form.BeginInvoke([Action]{&$append "`r`n…$x"})|Out-Null}} {param($n,$a)$form.BeginInvoke([Action]{&$append "`r`n» $n`r`n"})|Out-Null} {param($n,$r,$elapsed,$err)$form.BeginInvoke([Action]{&$append "`r`n$(if($err){'×'}else{'√'}) $n ($([Math]::Round($elapsed,2))s)`r`n"})|Out-Null} {param($x)$form.BeginInvoke([Action]{[System.Windows.Forms.MessageBox]::Show($x,$script:AppTitle)})|Out-Null} {param($u)} $script:CurrentCancel.Token}.GetNewClosure())
     $worker.Add_RunWorkerCompleted({param($s,$e)$send.Enabled=$true;$stop.Enabled=$false;$status.Text=if($e.Error){'错误：'+$e.Error.Message}else{'就绪'};if($e.Error){&$append "`r`n错误：$($e.Error.Message)`r`n"};if($ConfigValue.save_sessions){Save-Session $script:Messages $ConfigValue $null|Out-Null};$inputBox.Focus()}.GetNewClosure())
     $form.Add_FormClosed({Close-PersistentShell}.GetNewClosure());[void]$form.ShowDialog()
 }
@@ -748,11 +767,11 @@ function Main {
     if ($SelfTest) { return (Invoke-SelfTest $configValue) }
     if ($ShellCheck) { return (Invoke-ShellCheck $configValue) }
     if ($Gui -or (-not $Cli -and [Environment]::UserInteractive -and $env:OS -eq 'Windows_NT')) { Start-Gui $configValue; return 0 }
-    if ($Prompt) { if(-not $configValue.api_key -and $Setup){Invoke-Setup $configValue|Out-Null};Initialize-Messages $configValue;try{Invoke-AgentTurn $Prompt $configValue $script:Messages {param($x)Write-Host -NoNewline $x} {param($x)if($configValue.show_reasoning){Write-Error -NoNewline "…$x"}} {param($n,$a)if(-not $QuietTools){Write-Error "[tool] $n"}} {param($n,$r,$e,$err)if(-not $QuietTools){Write-Error "[tool] done $n"}} {param($x)Write-Warning $x} {param($u)} $null|Out-Null;Write-Host '' ;return 0}catch{Write-Error $_.Exception.Message;return 2} }
+    if ($Prompt) { if(-not $configValue.api_key -and $Setup){Invoke-Setup $configValue|Out-Null};Initialize-Messages $configValue;try{Invoke-AgentTurn $Prompt $configValue $script:Messages {param($x)Write-Host -NoNewline $x} {param($x)if($configValue.show_reasoning){Write-Host -NoNewline "…$x"}} {param($n,$a)if(-not $QuietTools){Write-Host "[tool] $n"}} {param($n,$r,$e,$err)if(-not $QuietTools){Write-Host "[tool] done $n"}} {param($x)Write-Warning $x} {param($u)} $null|Out-Null;Write-Host '' ;return 0}catch{$message=$_.Exception.Message;Write-Error -Message $message -ErrorAction Continue;return 2} }
     Invoke-Interactive $configValue; return 0
 }
 
-    try { $exitCode=Main; return $exitCode } catch { Write-Error $_.Exception.Message; Close-PersistentShell; return 2 }
+    try { $exitCode=Main; return $exitCode } catch { $message=$_.Exception.Message; Write-Error -Message $message -ErrorAction Continue; Close-PersistentShell; return 2 }
 }
 
 try {
