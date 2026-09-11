@@ -1,0 +1,45 @@
+name: PowerShell smoke tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test direct script invocation
+        shell: ${{ matrix.shell }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & .\\dsh-mini.ps1 -Version
+          if (($output -join "`n") -notmatch 'dsh-mini 1\\.1\\.5-ps1') {
+            throw "Direct invocation returned an unexpected version: $($output -join "`n")"
+          }
+
+      - name: Test script block invocation
+        shell: ${{ matrix.shell }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Get-Content -LiteralPath .\\dsh-mini.ps1 -Raw
+          $output = & ([scriptblock]::Create($source)) -Version
+          if (($output -join "`n") -notmatch 'dsh-mini 1\\.1\\.5-ps1') {
+            throw "Script block invocation returned an unexpected version: $($output -join "`n")"
+          }
+
+      - name: Run offline self-test
+        shell: ${{ matrix.shell }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = (& .\\dsh-mini.ps1 -SelfTest -Cli 2>&1 | Out-String)
+          Write-Host $output
+          if ($output -match '失败 [1-9][0-9]* 项') {
+            throw 'Offline self-test reported failures.'
+          }
