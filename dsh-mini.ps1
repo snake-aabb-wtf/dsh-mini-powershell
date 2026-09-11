@@ -546,7 +546,7 @@ function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
     $info=Get-TextFileInfo $target; $old=([string]$Args.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n")
     $count=([regex]::Matches($info.Normalized,[regex]::Escape($old))).Count; if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
     if ($count -gt 1) { throw "No replacement was performed. Multiple occurrences of old_str were found; ensure it is unique." }
-    $pos=$info.Normalized.IndexOf($old); Save-TextFileInfo $info ($info.Normalized.Substring(0,$pos)+$new+$info.Normalized.Substring($pos+$old.Length)); return "The file $target has been edited successfully."
+    $updated = $info.Normalized.Replace($old,$new); Save-TextFileInfo $info $updated; return "The file $target has been edited successfully."
 }
 
 function Invoke-EditorInsert([System.Collections.IDictionary]$Args) {
