@@ -1,0 +1,17 @@
+{
+  "base_url": "https://api.deepseek.com",
+  "api_key": "",
+  "model": "deepseek-chat",
+  "temperature": 0,
+  "stream": true,
+  "request_timeout": 300,
+  "retries": 3,
+  "include_usage": true,
+  "shell_mode": "persistent",
+  "shell_encoding": "auto",
+  "cwd": "",
+  "max_tool_rounds": 60,
+  "max_output_chars": 16000,
+  "show_reasoning": true,
+  "save_sessions": false
+}
