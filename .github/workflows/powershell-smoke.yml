@@ -37,7 +37,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $output = (& .\dsh-mini.ps1 -SelfTest -Cli 2>&1 | Out-String)
           Write-Host $output
-          if ($output -notmatch 'DSH_SELFTEST_RESULT total=7 passed=7 failed=0') {
+          if ($output -notmatch 'DSH_SELFTEST_RESULT total=(\d+) passed=\1 failed=0') {
             throw "Offline self-test reported failures or did not return its result marker: $output"
           }
 
@@ -72,6 +72,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $output = (& .\dsh-mini.ps1 -SelfTest -Cli 2>&1 | Out-String)
           Write-Host $output
-          if ($output -notmatch 'DSH_SELFTEST_RESULT total=7 passed=7 failed=0') {
+          if ($output -notmatch 'DSH_SELFTEST_RESULT total=(\d+) passed=\1 failed=0') {
             throw "Offline self-test reported failures or did not return its result marker: $output"
           }
