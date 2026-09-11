@@ -427,7 +427,7 @@ function Invoke-PersistentShell([string]$Command, [System.Collections.IDictionar
     if ($script:ShellState.Cwd -ne $ConfigValue.cwd) { Close-PersistentShell; $script:ShellState = New-PersistentShell $ConfigValue }
     $ps = $script:ShellState.PowerShell
     $ps.Commands.Clear()
-    $wrapped = "& {`n$Command`n} *>&1"
+    $wrapped = "& {`n`$global:LASTEXITCODE = 0`n$Command`n} *>&1"
     $async = $ps.AddScript($wrapped).BeginInvoke()
     if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMs)) {
         Close-PersistentShell
@@ -443,6 +443,7 @@ function Invoke-PersistentShell([string]$Command, [System.Collections.IDictionar
 function Invoke-ShellCommand([string]$Command, [System.Collections.IDictionary]$ConfigValue, [scriptblock]$OnOutput) {
     if (-not $Command.Trim()) { throw 'command must be a non-empty string' }
     $mode = [string]$ConfigValue.shell_mode
+    if ($mode -notin @('auto','persistent','oneshot')) { throw "shell_mode 必须是 auto、persistent 或 oneshot；收到：$mode" }
     $fallbackNote = ''
     if ($mode -eq 'oneshot') { $result = Invoke-OneShotShell $Command $ConfigValue ([int]$ConfigValue.shell_timeout_ms) }
     else {
@@ -658,7 +659,7 @@ function Invoke-AgentTurn([string]$UserText,[System.Collections.IDictionary]$Con
         foreach ($call in $toolCalls) {
             $name=$call.function.name; $toolArguments=@{}; try {$toolArguments=ConvertTo-HashtableDeep ($call.function.arguments|ConvertFrom-Json)} catch {$toolArguments=@{}}
             $started=Get-Date; if ($OnToolStart) { & $OnToolStart $name $toolArguments | Out-Null }; $isError=$false
-            try { if ($name -eq 'pwsh') {$result=Invoke-PwshTool $args $ConfigValue $(if($ConfigValue.show_live_output){$OnText}else{$null})} elseif($name -eq 'str_replace_editor'){$result=Invoke-EditorTool $args $maxChars} else {throw "Unknown tool: $name"} } catch {$result=$_.Exception.Message; $isError=$true}
+            try { if ($name -eq 'pwsh') {$result=Invoke-PwshTool $toolArguments $ConfigValue $(if($ConfigValue.show_live_output){$OnText}else{$null})} elseif($name -eq 'str_replace_editor'){$result=Invoke-EditorTool $toolArguments $maxChars} else {throw "Unknown tool: $name"} } catch {$result=$_.Exception.Message; $isError=$true}
             $elapsed=((Get-Date)-$started).TotalSeconds; [void]$MessageList.Add([ordered]@{role='tool';tool_call_id=$call.id;content=[string]$result}); if ($OnToolEnd) { & $OnToolEnd $name ([string]$result) $elapsed $isError | Out-Null }
         }
     }
@@ -699,9 +700,11 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
     Check 'Normalize base_url 裸域名' ((Normalize-BaseUrl 'https://api.example.com') -eq 'https://api.example.com/v1/chat/completions')
     Check 'Normalize base_url 自定义路径' ((Normalize-BaseUrl 'https://x.com/openai') -eq 'https://x.com/openai/chat/completions')
     Check 'models endpoint' ((Get-ModelsEndpoint 'https://x.com/v1/chat/completions') -eq 'https://x.com/v1/models')
+    Check 'result text string safe' ((Get-ResultText 'plain text') -eq 'plain text')
+    Check 'result text object without Text safe' ((Get-ResultText ([pscustomobject]@{Code=0})) -match 'Code')
     $tmp=Join-Path ([IO.Path]::GetTempPath()) ('dsh-mini-test-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $tmp|Out-Null
     try {
-        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); Write-Host '[selftest] editor view'; $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Write-Host '[selftest] editor replace'; Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Write-Host '[selftest] editor insert'; Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match "a`r`nx`r`nB"); Write-Host '[selftest] editor directory'; $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
+        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); Write-Host '[selftest] editor view'; $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Write-Host '[selftest] editor replace'; Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Invoke-EditorTool @{command='str_replace';path=$file;old_str='B';new_str='b'} 16000|Out-Null; Check 'editor tool route' ([IO.File]::ReadAllText($file) -eq "a`r`nb`r`nc`r`n"); Write-Host '[selftest] editor insert'; Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match "a`r`nx`r`nb"); Write-Host '[selftest] editor directory'; $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
     } catch {
         $detail = $_.Exception.GetType().FullName + ': ' + $_.Exception.Message
         if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) { $detail += " | " + $_.InvocationInfo.PositionMessage }
