@@ -544,7 +544,7 @@ function Invoke-EditorReplace([System.Collections.IDictionary]$Args) {
     if ($null -eq $Args.old_str -or $Args.old_str -eq '') { throw 'Parameter old_str is required and cannot be empty.' }
     $target=Require-AbsolutePath $Args.path; if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "The path $target does not exist or is a directory." }
     $info=Get-TextFileInfo $target; $old=([string]$Args.old_str).Replace("`r`n","`n").Replace("`r","`n"); $new=([string]$Args.new_str).Replace("`r`n","`n").Replace("`r","`n")
-    $count=([regex]::Matches($info.Normalized,[regex]::Escape($old))).Count; if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
+    $parts=$info.Normalized.Split([string[]]@($old),[System.StringSplitOptions]::None); $count=$parts.Count-1; if ($count -eq 0) { throw "No replacement was performed, old_str did not appear verbatim in $target." }
     if ($count -gt 1) { throw "No replacement was performed. Multiple occurrences of old_str were found; ensure it is unique." }
     $updated = $info.Normalized.Replace($old,$new); Save-TextFileInfo $info $updated; return "The file $target has been edited successfully."
 }
@@ -691,9 +691,9 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
     Check 'models endpoint' ((Get-ModelsEndpoint 'https://x.com/v1/chat/completions') -eq 'https://x.com/v1/models')
     $tmp=Join-Path ([IO.Path]::GetTempPath()) ('dsh-mini-test-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $tmp|Out-Null
     try {
-        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); Write-Host '[selftest] editor view'; $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Write-Host '[selftest] editor replace'; Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Write-Host '[selftest] editor insert'; Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match 'a`r`nx`r`nB'); Write-Host '[selftest] editor directory'; $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
+        $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); Write-Host '[selftest] editor view'; $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Write-Host '[selftest] editor replace'; Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Write-Host '[selftest] editor insert'; Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match "a`r`nx`r`nB"); Write-Host '[selftest] editor directory'; $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
     } catch {
-        $detail = $_.Exception.Message
+        $detail = $_.Exception.GetType().FullName + ': ' + $_.Exception.Message
         if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) { $detail += " | " + $_.InvocationInfo.PositionMessage }
         if ($_.ScriptStackTrace) { $detail += " | stack: " + $_.ScriptStackTrace.Replace([Environment]::NewLine,' > ') }
         Check 'editor functions' $false $detail
