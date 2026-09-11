@@ -37,8 +37,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $output = (& .\dsh-mini.ps1 -SelfTest -Cli 2>&1 | Out-String)
           Write-Host $output
-          if ($output -match '失败 [1-9][0-9]* 项') {
-            throw 'Offline self-test reported failures.'
+          if ($output -notmatch 'DSH_SELFTEST_RESULT total=7 passed=7 failed=0') {
+            throw "Offline self-test reported failures or did not return its result marker: $output"
           }
 
   pwsh-7:
@@ -72,6 +72,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $output = (& .\dsh-mini.ps1 -SelfTest -Cli 2>&1 | Out-String)
           Write-Host $output
-          if ($output -match '失败 [1-9][0-9]* 项') {
-            throw 'Offline self-test reported failures.'
+          if ($output -notmatch 'DSH_SELFTEST_RESULT total=7 passed=7 failed=0') {
+            throw "Offline self-test reported failures or did not return its result marker: $output"
           }
