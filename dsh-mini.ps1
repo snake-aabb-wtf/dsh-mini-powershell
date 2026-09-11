@@ -692,7 +692,11 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
     $tmp=Join-Path ([IO.Path]::GetTempPath()) ('dsh-mini-test-'+[guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $tmp|Out-Null
     try {
         $file=Join-Path $tmp 'sample.txt'; [IO.File]::WriteAllText($file,"a`r`nb`r`nc`r`n",(New-Object -TypeName System.Text.UTF8Encoding -ArgumentList $false)); $view=Invoke-EditorView $file $null 16000; Check 'editor view line numbers' ($view -match '1\s+a' -and $view -match '3\s+c'); Invoke-EditorReplace @{path=$file;old_str='b';new_str='B'}|Out-Null; Check 'editor str_replace preserves CRLF' ([IO.File]::ReadAllText($file) -eq "a`r`nB`r`nc`r`n"); Invoke-EditorInsert @{path=$file;insert_line=1;new_str='x'}|Out-Null; Check 'editor insert' ([IO.File]::ReadAllText($file) -match 'a`r`nx`r`nB'); $dirView=Invoke-EditorView $tmp $null 16000; Check 'editor directory view' ($dirView -match 'sample.txt')
-    } catch { Check 'editor functions' $false $_.Exception.Message }
+    } catch {
+        $detail = $_.Exception.Message
+        if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) { $detail += " | " + $_.InvocationInfo.PositionMessage }
+        Check 'editor functions' $false $detail
+    }
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     try {
         $ConfigValue.cwd = (Get-Location).Path; $ConfigValue.shell_mode = 'persistent'; Close-PersistentShell
@@ -701,7 +705,7 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
         Check 'PowerShell Runspace 中文输出' ((Get-ResultText $first) -match '中文测试-OK')
         Check 'PowerShell Runspace 跨调用保留变量' ((Get-ResultText $second) -match 'x=41')
     } catch { Check 'PowerShell Runspace' $false $_.Exception.Message } finally { Close-PersistentShell }
-    $failed=@($tests|Where-Object {-not $_.Ok}); Write-Host "`n自检完成：$($tests.Count) 项，通过 $($tests.Count-$failed.Count) 项，失败 $($failed.Count) 项"; return $(if($failed.Count){1}else{0})
+    $failed=@($tests|Where-Object {-not $_.Ok}); Write-Host "`n自检完成：$($tests.Count) 项，通过 $($tests.Count-$failed.Count) 项，失败 $($failed.Count) 项"; Write-Output "DSH_SELFTEST_RESULT total=$($tests.Count) passed=$($tests.Count-$failed.Count) failed=$($failed.Count)"; return $(if($failed.Count){1}else{0})
 }
 
 function Invoke-Interactive([System.Collections.IDictionary]$ConfigValue) {
