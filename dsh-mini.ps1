@@ -695,6 +695,7 @@ function Invoke-SelfTest([System.Collections.IDictionary]$ConfigValue) {
     } catch {
         $detail = $_.Exception.Message
         if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) { $detail += " | " + $_.InvocationInfo.PositionMessage }
+        if ($_.ScriptStackTrace) { $detail += " | stack: " + $_.ScriptStackTrace.Replace([Environment]::NewLine,' > ') }
         Check 'editor functions' $false $detail
     }
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
